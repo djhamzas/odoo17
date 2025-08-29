@@ -1,0 +1,136 @@
+#cloud-config
+autoinstall:
+  version: 1
+
+  # Locale and keyboard for French
+  locale: fr_FR.UTF-8
+  keyboard:
+    layout: fr
+
+  # Network configuration
+  network:
+    version: 2
+    renderer: networkd
+    ethernets:
+      enp1s0:
+        dhcp4: false
+        dhcp6: false
+        addresses:
+          - 192.168.10.20/24
+        routes:
+          - to: default
+            via: 192.168.10.2
+        nameservers:
+          addresses:
+            - 8.8.8.8
+            - 8.8.4.4
+          search:
+            - local
+
+  # Storage: no swap
+  storage:
+    layout:
+      name: direct
+    swap:
+      size: 0
+
+  # User configuration
+  identity:
+    hostname: ubuntu-vm
+    username: ubuntu
+    password: $6$rounds=4096$saltsalt$L9FsLm5o8NdmqrB2IJHpLjNTSFSKz6vxUkM8DjE5VD4ZZyHHYLYJhH8ZJHhEpF.P3GKvN/1vGjDUy1yVvxvIq.
+
+  # SSH configuration
+  ssh:
+    install-server: true
+    allow-pw: true
+    authorized-keys: []
+
+  # Essential utilities to install
+  packages:
+    - openssh-server
+    - curl
+    - wget
+    - git
+    - vim
+    - htop
+    - net-tools
+    - software-properties-common
+    - apt-transport-https
+    - ca-certificates
+    - gnupg
+    - lsb-release
+    - ufw
+    - fail2ban
+    - unattended-upgrades
+    - bridge-utils
+
+  # Update & upgrade packages
+  package_update: true
+  package_upgrade: true
+
+  # Services to enable
+  services:
+    - ssh
+    - ufw
+    - fail2ban
+
+  # Early diagnostics
+  early-commands:
+    - echo "Starting Ubuntu autoinstall..."
+
+  # Late configuration - MERGED SECTION
+  late-commands:
+    # Set non-interactive environment
+    - curtin in-target --target=/target -- bash -c "export DEBIAN_FRONTEND=noninteractive"
+    - curtin in-target --target=/target -- bash -c "export NEEDRESTART_MODE=a"
+    
+    # Enable firewall and configure access rules
+    - curtin in-target --target=/target -- ufw --force enable
+    - curtin in-target --target=/target -- ufw default deny incoming
+    - curtin in-target --target=/target -- ufw default allow outgoing
+    - curtin in-target --target=/target -- ufw allow ssh
+    - curtin in-target --target=/target -- ufw allow 8069/tcp comment 'Odoo HTTP'
+    - curtin in-target --target=/target -- ufw allow 8071/tcp comment 'Odoo HTTPS'
+    - curtin in-target --target=/target -- ufw allow 8072/tcp comment 'Odoo Longpolling'
+    
+    # Optional: Allow specific subnet only (more secure)
+    # - curtin in-target --target=/target -- ufw allow from 192.168.10.0/24 to any port 8069
+    # - curtin in-target --target=/target -- ufw allow from 192.168.10.0/24 to any port 8071
+    # - curtin in-target --target=/target -- ufw allow from 192.168.10.0/24 to any port 8072
+
+    # Enable automatic updates
+    - curtin in-target --target=/target -- systemctl enable unattended-upgrades
+
+    # Set timezone
+    - curtin in-target --target=/target -- timedatectl set-timezone Europe/Paris
+
+    # Secure SSH configuration
+    - curtin in-target --target=/target -- sed -i 's/#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
+    - curtin in-target --target=/target -- sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+
+    # Create admin user without password prompt
+    - curtin in-target --target=/target -- useradd -m -s /bin/bash -G sudo admin
+    - curtin in-target --target=/target -- bash -c "echo 'admin:admin' | chpasswd"
+
+    # Prepare for running Odoo installer with non-interactive flags
+    - curtin in-target --target=/target -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get update -y"
+    - curtin in-target --target=/target -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -q wget git"
+
+    # Execute Odoo installation script with automatic yes responses
+    - curtin in-target --target=/target -- bash -c "export DEBIAN_FRONTEND=noninteractive && wget -O /tmp/odoo_install https://raw.githubusercontent.com/djhamzas/odoo17/main/odoo_install && chmod +x /tmp/odoo_install && yes | /tmp/odoo_install"
+
+    # Wait until Odoo service is active
+    - curtin in-target --target=/target -- bash -c "while ! systemctl is-active --quiet odoo; do echo 'Waiting for Odoo to start...' && sleep 5; done"
+
+    # Execute nic.sh from GitHub after Odoo is running
+    - curtin in-target --target=/target -- bash -c "export DEBIAN_FRONTEND=noninteractive && wget -O /tmp/nic.sh https://raw.githubusercontent.com/djhamzas/odoo17/main/nic.sh && chmod +x /tmp/nic.sh && yes | /tmp/nic.sh"
+
+final_message: |
+  Ubuntu installation completed successfully!
+  System is ready for use with br0 bridge configuration.
+
+  Default user: ubuntu / password: ubuntu
+  Admin user: admin / password: admin
+  Network: br0 bridge with static IP 192.168.10.20
+  Odoo 17 installer from djhamzas/odoo17 has been executed.
